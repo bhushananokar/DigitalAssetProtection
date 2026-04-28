@@ -3,3 +3,5 @@
 -r services/matching/requirements.txt
 -r services/ingest/requirements.txt
 -r services/violations/requirements.txt
+-r services/alerting/requirements.txt
+-r services/anomaly/requirements.txt
