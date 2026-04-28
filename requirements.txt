@@ -2,3 +2,4 @@
 -r services/fingerprint/requirements.txt
 -r services/matching/requirements.txt
 -r services/ingest/requirements.txt
+-r services/violations/requirements.txt
