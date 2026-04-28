@@ -1,0 +1,43 @@
+AI/ML
+
+Fingerprint Service (services/fingerprint/)
+What it does: the core ML service. Subscribes to new asset events, generates embeddings, stores them in BigQuery and the Matching Engine index. Also exposes an endpoint for on-demand embedding generation.
+Endpoints:
+POST /fingerprint/generate — takes asset_id and storage_uri, generates embedding, stores it, returns fingerprint_id
+Internal only, not called by dashboard directly except for re-fingerprinting
+Internal tasks:
+Subscribe to asset-uploaded Pub/Sub topic
+On each event:
+Pull asset from GCS (keyframes for video, full image for images)
+Pass through Vertex AI multimodal embedding model
+For video: generate one embedding per keyframe, store all, also generate a mean pooled single embedding representing the full video
+Write fingerprint record to BigQuery fingerprints table
+Upsert embedding vector into Vertex AI Matching Engine index
+Update fingerprint_status on the asset record in BigQuery to "ready" or "failed"
+Robustness testing task (not production, but required): build a test script that takes a sample asset and runs it through the following transformations, generating embeddings for each, and checks that similarity scores against the original stay above 0.80:
+Crop to 80% of original
+Recompress video to lower bitrate
+Add a semi-transparent text overlay
+Horizontal flip
+Screenshot a single frame and treat as image
+Dependencies: Vertex AI (embedding model + Matching Engine), BigQuery, Cloud Storage, Pub/Sub
+
+Matching Service (services/matching/)
+What it does: takes an embedding and queries the Matching Engine index for similar vectors. Returns matches with scores. Called by the scanner service when it has new discovered content.
+Endpoints:
+POST /matching/query — takes an embedding vector, returns top-K nearest neighbors with similarity scores
+Request: { embedding: [float], top_k: int (default 5), threshold: float (default 0.70) }
+Response: { matches: [ { asset_id, fingerprint_id, similarity_score, asset_type } ] }
+POST /fingerprint/match — higher level endpoint, takes a raw file or URL instead of a vector. Generates embedding internally then calls the query. This is what the dashboard "manual check" feature calls.
+Request: { source_url: string (optional), file: binary (optional) }
+Response: { matched: boolean, matches: [ { asset_id, asset_name, similarity_score, confidence } ] }
+POST /matching/index/upsert — internal, called by fingerprint service to add new vectors to the index
+Request: { fingerprint_id, asset_id, embedding: [float] }
+Response: { success: boolean }
+Internal tasks:
+Maintain connection to Vertex AI Matching Engine index
+On query: run ANN search, filter results below threshold, return ranked list
+Publish match results to match-found Pub/Sub topic (consumed by violations service)
+Handle the case where top result is below threshold — return empty matches, do not publish to Pub/Sub
+Index management: periodic re-index rebuild if the index drifts (Matching Engine requires explicit rebuilds on large updates)
+Dependencies: Vertex AI Matching Engine, Pub/Sub, Cloud Storage (to fetch files for the match endpoint)

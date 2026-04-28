@@ -1,0 +1,38 @@
+Base URL All Cloud Run services expose their own base URL. For local dev, everything runs on localhost with different ports. In production, each service gets a Cloud Run URL. The dashboard should read these from environment variables — NEXT_PUBLIC_INGEST_URL, NEXT_PUBLIC_VIOLATIONS_URL, NEXT_PUBLIC_SCANNER_URL.
+
+Asset Management APIs Owned by: you (ingest service)
+POST /assets/upload Multipart form upload. Accepts video or image file plus metadata. Request body: file (binary), org_id (string), asset_type (video | image | graphic), event_name (string) Response: { asset_id, storage_uri, upload_timestamp, status: "processing" }
+GET /assets Returns paginated list of all uploaded assets for an org. Query params: org_id, page, limit, asset_type Response: { assets: [ { asset_id, asset_type, event_name, upload_timestamp, fingerprint_status: "pending" | "ready" | "failed" } ], total, page }
+GET /assets/:asset_id Returns full detail for a single asset. Response: { asset_id, org_id, asset_type, event_name, upload_timestamp, storage_uri, fingerprint_status, violation_count }
+DELETE /assets/:asset_id Removes asset and its fingerprint from the index. Response: { success: true }
+
+Violations APIs Owned by: you (violations service)
+GET /violations Main dashboard feed. Returns paginated violation events. Query params: org_id, page, limit, severity (low | medium | high | critical), status (open | resolved | escalated | dismissed), asset_id, platform, from_date, to_date, anomaly_flagged (boolean) Response: { violations: [ { violation_id, source_url, discovered_at, matched_asset_id, similarity_score, severity, platform, anomaly_flagged, status, evidence_uri } ], total, page }
+GET /violations/:violation_id Full detail for a single violation including evidence bundle. Response: { violation_id, source_url, discovered_at, matched_asset_id, asset_name, similarity_score, severity, platform, anomaly_flagged, status, evidence_uri, evidence: { screenshot_url, content_hash, detection_timestamp } }
+PATCH /violations/:violation_id/status Update violation status — resolve, escalate, or dismiss. Request body: { status: "resolved" | "escalated" | "dismissed", note: string (optional) } Response: { violation_id, status, updated_at }
+GET /violations/stats Aggregate stats for the dashboard overview cards. Query params: org_id, from_date, to_date Response: { total_violations, open_violations, critical_violations, violations_by_severity: { low, medium, high, critical }, violations_by_platform: [ { platform, count } ], violations_over_time: [ { date, count } ], top_affected_assets: [ { asset_id, asset_name, count } ] }
+
+Scanner APIs Owned by: full stack developer (scanner service)
+POST /scanner/run Manually trigger a scan job. Useful for demo and testing. Request body: { org_id, keywords: [string], platforms: ["youtube", "web"] } Response: { job_id, status: "started", triggered_at }
+GET /scanner/jobs List recent scan jobs and their status. Query params: org_id, limit Response: { jobs: [ { job_id, triggered_at, status: "running" | "completed" | "failed", urls_scanned, matches_found } ] }
+GET /scanner/jobs/:job_id Status of a specific scan job. Response: { job_id, status, triggered_at, completed_at, urls_scanned, matches_found, errors: [string] }
+
+Fingerprint APIs Owned by: ML person (fingerprint service)
+POST /fingerprint/generate Generate embedding for a given asset. Called internally by ingest but dashboard can call it to re-fingerprint. Request body: { asset_id, storage_uri, asset_type } Response: { fingerprint_id, asset_id, model_version, generated_at, status: "success" | "failed" }
+POST /fingerprint/match Given a URL or uploaded file, check if it matches anything in the index. This is the manual check endpoint the dashboard exposes as "check this URL." Request body: { source_url: string (optional), file: binary (optional) } Response: { matched: boolean, matches: [ { asset_id, asset_name, similarity_score, confidence: "high" | "medium" | "low" } ] }
+
+Error Response Format All endpoints return errors in this shape consistently: { error: true, code: string, message: string, status: number }
+Common codes: ASSET_NOT_FOUND, FINGERPRINT_FAILED, INVALID_FILE_TYPE, UNAUTHORIZED, SCAN_JOB_FAILED
+
+What the dashboard pages map to:
+Home / overview → GET /violations/stats
+Violations feed → GET /violations with filter params
+Violation detail → GET /violations/:violation_id + PATCH /violations/:violation_id/status
+Assets page → GET /assets + POST /assets/upload
+Manual check → POST /fingerprint/match
+Scanner control → POST /scanner/run + GET /scanner/jobs
+
+Notes for the full stack person:
+All list endpoints are paginated the same way — page and limit params, total in response. Build one reusable pagination hook and use it everywhere.
+The violations/stats endpoint is the most dashboard-critical one. If it's slow, the whole homepage feels slow. Worth adding a BigQuery materialized view or caching layer behind it early.
+For file uploads on the assets page, Next.js API routes should proxy the multipart upload to the ingest service rather than hitting it directly from the browser — keeps CORS simple and lets you add auth later without touching the frontend again.

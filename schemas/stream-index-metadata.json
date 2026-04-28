@@ -1,0 +1,14 @@
+{
+  "contentsDeltaUri": "gs://gen-lang-client-0647383072-me-index/empty-init",
+  "config": {
+    "dimensions": 1408,
+    "approximateNeighborsCount": 10,
+    "distanceMeasureType": "COSINE_DISTANCE",
+    "algorithmConfig": {
+      "treeAhConfig": {
+        "leafNodeEmbeddingCount": 500,
+        "leafNodesToSearchPercent": 7
+      }
+    }
+  }
+}

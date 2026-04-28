@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - services/matching/Dockerfile
+      - -t
+      - gcr.io/$PROJECT_ID/matching-service:latest
+      - .
+images:
+  - gcr.io/$PROJECT_ID/matching-service:latest

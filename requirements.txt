@@ -1,0 +1,3 @@
+# Install both service dependency sets for local development.
+-r services/fingerprint/requirements.txt
+-r services/matching/requirements.txt

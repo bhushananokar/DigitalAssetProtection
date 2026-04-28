@@ -1,0 +1,13 @@
+fastapi
+gunicorn
+uvicorn[standard]
+google-cloud-aiplatform
+google-cloud-bigquery
+google-cloud-pubsub
+google-cloud-storage
+Pillow
+numpy
+requests
+opencv-python
+python-multipart
+pytest

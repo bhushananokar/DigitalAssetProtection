@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - services/fingerprint/Dockerfile
+      - -t
+      - gcr.io/$PROJECT_ID/fingerprint-service:latest
+      - .
+images:
+  - gcr.io/$PROJECT_ID/fingerprint-service:latest
