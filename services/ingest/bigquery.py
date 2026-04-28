@@ -15,6 +15,7 @@ class IngestBigQuery:
     violations_table: str
     client: Optional[bigquery.Client] = None
     _asset_columns: Optional[set[str]] = None
+    _violation_columns: Optional[set[str]] = None
 
     def __post_init__(self) -> None:
         if self.client is None:
@@ -37,6 +38,20 @@ class IngestBigQuery:
     def _filter_asset_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         columns = self._load_asset_columns()
         return {k: v for k, v in record.items() if k in columns}
+
+    def _load_violation_columns(self) -> set[str]:
+        if self._violation_columns is None:
+            table = self.client.get_table(self.violations_table_fqn)
+            self._violation_columns = {field.name for field in table.schema}
+        return self._violation_columns
+
+    def _violation_asset_column(self) -> Optional[str]:
+        columns = self._load_violation_columns()
+        if "asset_id" in columns:
+            return "asset_id"
+        if "matched_asset_id" in columns:
+            return "matched_asset_id"
+        return None
 
     @staticmethod
     def _metadata_as_dict(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -137,17 +152,26 @@ class IngestBigQuery:
         }
 
     def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
-        sql = f"""
-        SELECT a.*, COALESCE(v.violation_count, 0) AS violation_count
-        FROM `{self.assets_table_fqn}` a
-        LEFT JOIN (
-            SELECT asset_id, COUNT(1) AS violation_count
-            FROM `{self.violations_table_fqn}`
-            GROUP BY asset_id
-        ) v USING (asset_id)
-        WHERE a.asset_id = @asset_id
-        LIMIT 1
-        """
+        violation_asset_col = self._violation_asset_column()
+        if violation_asset_col:
+            sql = f"""
+            SELECT a.*, COALESCE(v.violation_count, 0) AS violation_count
+            FROM `{self.assets_table_fqn}` a
+            LEFT JOIN (
+                SELECT {violation_asset_col} AS asset_id, COUNT(1) AS violation_count
+                FROM `{self.violations_table_fqn}`
+                GROUP BY {violation_asset_col}
+            ) v USING (asset_id)
+            WHERE a.asset_id = @asset_id
+            LIMIT 1
+            """
+        else:
+            sql = f"""
+            SELECT a.*, 0 AS violation_count
+            FROM `{self.assets_table_fqn}` a
+            WHERE a.asset_id = @asset_id
+            LIMIT 1
+            """
         job = self.client.query(
             sql,
             job_config=bigquery.QueryJobConfig(

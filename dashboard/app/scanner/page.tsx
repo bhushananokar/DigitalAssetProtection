@@ -129,7 +129,9 @@ export default function ScannerPage() {
           <p className="text-sm">Status: {selected.status}</p>
           <p className="text-sm">Completed: {selected.completed_at ?? "-"}</p>
           <h4 className="mt-3 text-sm font-medium">Errors</h4>
-          <ul className="list-disc pl-5 text-sm" style={{ color: "var(--muted)" }}>{selected.errors.map((e) => <li key={e}>{e}</li>)}</ul>
+          <ul className="list-disc pl-5 text-sm" style={{ color: "var(--muted)" }}>
+            {selected.errors.map((e, idx) => <li key={`${e}-${idx}`}>{e}</li>)}
+          </ul>
         </div>
       ) : null}
     </ErrorBoundary>

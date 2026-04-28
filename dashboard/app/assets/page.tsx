@@ -28,10 +28,11 @@ export default function AssetsPage() {
 
   const load = () =>
     getAssets(query).then((data) => {
-      setRows(data.assets);
+      const assets = Array.isArray(data.assets) ? data.assets : [];
+      setRows(assets);
       setTotal(data.total);
       void Promise.all(
-        data.assets.map(async (asset) => {
+        assets.map(async (asset) => {
           const detail = await getAsset(asset.asset_id);
           setRows((prev) =>
             prev.map((row) =>

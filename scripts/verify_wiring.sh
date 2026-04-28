@@ -52,7 +52,7 @@ fi
 
 echo
 echo "== Cloud Run Wiring =="
-for svc in fingerprint-service ingest-service matching-service scanner-service violations-service anomaly-service; do
+for svc in fingerprint-service ingest-service matching-service scanner-service violations-service anomaly-service "${DASHBOARD_SERVICE_NAME:-dashboard-service}"; do
   if ! gcloud run services describe "${svc}" --project "${PROJECT}" --region "${REGION}" >/dev/null 2>&1; then
     echo "FAIL missing service: ${svc}"
     continue
@@ -79,6 +79,16 @@ else
   else
     echo "WARN scanner uses public URL (acceptable fallback): ${scanner_matching}"
   fi
+fi
+
+dashboard_service="${DASHBOARD_SERVICE_NAME:-dashboard-service}"
+dashboard_ingest="$(gcloud run services describe "${dashboard_service}" --project "${PROJECT}" --region "${REGION}" --format='value(spec.template.spec.containers[0].env[?name=NEXT_PUBLIC_INGEST_URL].value)' 2>/dev/null || true)"
+dashboard_violations="$(gcloud run services describe "${dashboard_service}" --project "${PROJECT}" --region "${REGION}" --format='value(spec.template.spec.containers[0].env[?name=NEXT_PUBLIC_VIOLATIONS_URL].value)' 2>/dev/null || true)"
+dashboard_scanner="$(gcloud run services describe "${dashboard_service}" --project "${PROJECT}" --region "${REGION}" --format='value(spec.template.spec.containers[0].env[?name=NEXT_PUBLIC_SCANNER_URL].value)' 2>/dev/null || true)"
+if [[ -z "${dashboard_ingest}" || -z "${dashboard_violations}" || -z "${dashboard_scanner}" ]]; then
+  echo "WARN dashboard backend URL env vars are missing or incomplete"
+else
+  echo "OK dashboard backend URLs are configured"
 fi
 
 echo

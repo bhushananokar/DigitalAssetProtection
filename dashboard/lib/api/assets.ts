@@ -1,14 +1,24 @@
 import { apiRequest } from "@/lib/api/client";
 import type { AssetDetail, AssetSummary } from "@/lib/types";
 
-const base = process.env.NEXT_PUBLIC_INGEST_URL ?? "";
+const base = "/api";
 
 export function getAssets(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== "") search.set(key, String(value));
   });
-  return apiRequest<{ assets: AssetSummary[]; total: number; page: number }>(`${base}/assets?${search.toString()}`);
+  return apiRequest<{ assets?: AssetSummary[]; items?: AssetSummary[]; total?: number; page?: number }>(
+    `${base}/assets?${search.toString()}`,
+  ).then((payload) => ({
+    assets: Array.isArray(payload.assets)
+      ? payload.assets
+      : Array.isArray(payload.items)
+        ? payload.items
+        : [],
+    total: Number(payload.total ?? 0),
+    page: Number(payload.page ?? 1),
+  }));
 }
 
 export function getAsset(assetId: string) {

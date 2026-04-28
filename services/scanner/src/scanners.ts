@@ -8,6 +8,19 @@ interface SharedContext {
   job: ScanJob;
 }
 
+async function providerErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = (await response.json()) as {
+      error?: { message?: string };
+    };
+    const detail = data.error?.message;
+    if (detail) return `${fallback}: ${detail}`;
+  } catch {
+    // Ignore parse failures and fall back to status-only message.
+  }
+  return fallback;
+}
+
 function isImageUrl(url: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(url);
 }
@@ -50,7 +63,10 @@ export async function runYouTubeScan(ctx: SharedContext): Promise<void> {
 
   const res = await fetch(url.toString());
   if (!res.ok) {
-    throw new Error(`YouTube API call failed: ${res.status}`);
+    const message = await providerErrorMessage(res, `YouTube API call failed: ${res.status}`);
+    ctx.job.errors.push(message);
+    console.warn(`[YOUTUBE] ${message}`);
+    return;
   }
 
   const data = (await res.json()) as {
@@ -78,7 +94,10 @@ export async function runWebScan(ctx: SharedContext): Promise<void> {
 
   const res = await fetch(url.toString());
   if (!res.ok) {
-    throw new Error(`Custom Search API call failed: ${res.status}`);
+    const message = await providerErrorMessage(res, `Custom Search API call failed: ${res.status}`);
+    ctx.job.errors.push(message);
+    console.warn(`[WEB] ${message}`);
+    return;
   }
 
   const data = (await res.json()) as {

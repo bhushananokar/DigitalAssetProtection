@@ -115,4 +115,7 @@ gcloud run deploy scanner-service \
 ANOMALY_URL="$(gcloud run services describe anomaly-service --project "${PROJECT}" --region "${REGION}" --format='value(status.url)')"
 ./scripts/setup_scheduler.sh "${ANOMALY_URL}" "${SERVICE_ACCOUNT}"
 
-echo "All services deployed and scheduler configured."
+# 9) Deploy dashboard frontend
+./scripts/deploy_dashboard.sh "${SERVICE_ACCOUNT}"
+
+echo "All services, scheduler, and dashboard deployed."

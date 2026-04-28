@@ -41,7 +41,7 @@ export function ViolationsPageClient() {
 
   useEffect(() => {
     getViolations(query).then((data) => {
-      setRows(data.violations);
+      setRows(Array.isArray(data.violations) ? data.violations : []);
       setTotal(data.total);
     });
   }, [query]);

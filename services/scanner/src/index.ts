@@ -8,6 +8,15 @@ import type { RunScanBody, ScanJob } from "./types.js";
 export const app = express();
 
 app.use((req, res, next) => {
+  const started = Date.now();
+  res.on("finish", () => {
+    const durationMs = Date.now() - started;
+    console.log(`[scanner] ${req.method} ${req.path} status=${res.statusCode} duration_ms=${durationMs}`);
+  });
+  next();
+});
+
+app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
