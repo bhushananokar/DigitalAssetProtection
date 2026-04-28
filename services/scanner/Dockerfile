@@ -1,6 +1,16 @@
-FROM python:3.11-slim
+FROM node:20-alpine
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+RUN corepack enable
+
+COPY package.json tsconfig.json ./
+RUN pnpm install --frozen-lockfile=false
+
+COPY src ./src
+
+RUN pnpm build
+
+EXPOSE 3003
+
+CMD ["node", "dist/index.js"]
