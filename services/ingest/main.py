@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,23 @@ ALLOWED_EXTENSIONS = {"mp4", "mov", "jpg", "jpeg", "png", "svg"}
 VIDEO_EXTENSIONS = {"mp4", "mov"}
 
 app = FastAPI(title="Ingest Service", version="1.0.0")
+
+
+def _load_setup_env_if_present() -> None:
+    here = Path(__file__).resolve()
+    repo_root = here.parent.parent.parent
+    env_path = repo_root / "setup.env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def _getenv(name: str, default: Optional[str] = None) -> str:
@@ -65,6 +83,9 @@ def _normalize_extension(filename: str) -> str:
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
     return ext
+
+
+_load_setup_env_if_present()
 
 
 @app.get("/healthz")
@@ -121,12 +142,22 @@ async def upload_asset(
             "org_id": org_id,
             "asset_type": asset_type,
             "event_name": event_name,
+            "upload_timestamp": now,
             "storage_uri": storage_uri,
             "keyframe_uris": keyframe_uris,
             "fingerprint_status": "pending",
             "deleted": False,
             "created_at": now,
             "updated_at": now,
+            "metadata": json.dumps(
+                {
+                    "fingerprint_status": "pending",
+                    "keyframe_uris": keyframe_uris,
+                    "deleted": False,
+                    "filename": file.filename or "",
+                    "content_type": file.content_type or "",
+                }
+            ),
         }
     )
 

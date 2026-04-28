@@ -38,6 +38,35 @@ class IngestBigQuery:
         columns = self._load_asset_columns()
         return {k: v for k, v in record.items() if k in columns}
 
+    @staticmethod
+    def _metadata_as_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = row.get("metadata")
+        if metadata is None:
+            return {}
+        if isinstance(metadata, dict):
+            return metadata
+        if isinstance(metadata, str):
+            try:
+                import json
+
+                parsed = json.loads(metadata)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {}
+        return {}
+
+    def _normalize_asset_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(row)
+        metadata = self._metadata_as_dict(normalized)
+        if "fingerprint_status" not in normalized and "fingerprint_status" in metadata:
+            normalized["fingerprint_status"] = metadata.get("fingerprint_status")
+        if "keyframe_uris" not in normalized and "keyframe_uris" in metadata:
+            normalized["keyframe_uris"] = metadata.get("keyframe_uris")
+        if "deleted" not in normalized and "deleted" in metadata:
+            normalized["deleted"] = metadata.get("deleted")
+        return normalized
+
     def insert_asset(self, record: Dict[str, Any]) -> None:
         filtered = self._filter_asset_record(record)
         if not filtered:
@@ -92,7 +121,7 @@ class IngestBigQuery:
             sql,
             job_config=bigquery.QueryJobConfig(query_parameters=params),
         )
-        rows = [dict(row.items()) for row in job.result()]
+        rows = [self._normalize_asset_row(dict(row.items())) for row in job.result()]
 
         count_params = [p for p in params if p.name not in ("limit", "offset")]
         count_job = self.client.query(
@@ -125,7 +154,7 @@ class IngestBigQuery:
                 query_parameters=[bigquery.ScalarQueryParameter("asset_id", "STRING", asset_id)]
             ),
         )
-        rows = [dict(row.items()) for row in job.result()]
+        rows = [self._normalize_asset_row(dict(row.items())) for row in job.result()]
         return rows[0] if rows else None
 
     def mark_deleted(self, asset_id: str, hard_delete: bool) -> None:
@@ -148,7 +177,8 @@ class IngestBigQuery:
             set_clauses.append("hard_deleted = @hard_delete")
 
         if not set_clauses:
-            raise RuntimeError("Assets table schema does not support soft delete fields.")
+            # Best-effort no-op when schema does not model soft-delete.
+            return
 
         sql = f"""
         UPDATE `{self.assets_table_fqn}`

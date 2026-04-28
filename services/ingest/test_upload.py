@@ -5,11 +5,12 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import cv2
 import numpy as np
 import requests
+from google.api_core.exceptions import DeadlineExceeded
 from google.cloud import bigquery, pubsub_v1, storage
 from PIL import Image
 
@@ -111,42 +112,68 @@ def _fetch_asset_row(project_id: str, dataset: str, table: str, asset_id: str) -
     return items[0]
 
 
+def _fingerprint_status(row: Dict[str, object]) -> Optional[str]:
+    direct = row.get("fingerprint_status")
+    if isinstance(direct, str):
+        return direct
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict):
+        value = metadata.get("fingerprint_status")
+        if isinstance(value, str):
+            return value
+    if isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+            if isinstance(parsed, dict):
+                value = parsed.get("fingerprint_status")
+                if isinstance(value, str):
+                    return value
+        except Exception:
+            return None
+    return None
+
+
 def _assert_pubsub_message(
     *,
-    project_id: str,
-    topic_name: str,
+    subscriber: pubsub_v1.SubscriberClient,
+    subscription_path: str,
     expected_asset_id: str,
     wait_seconds: int = 20,
 ) -> None:
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        try:
+            pulled = subscriber.pull(
+                request={"subscription": subscription_path, "max_messages": 10},
+                timeout=5,
+            )
+        except DeadlineExceeded:
+            time.sleep(1)
+            continue
+        if not pulled.received_messages:
+            time.sleep(1)
+            continue
+        ack_ids = []
+        for item in pulled.received_messages:
+            ack_ids.append(item.ack_id)
+            payload = json.loads(item.message.data.decode("utf-8"))
+            if payload.get("asset_id") == expected_asset_id:
+                subscriber.acknowledge(
+                    request={"subscription": subscription_path, "ack_ids": ack_ids}
+                )
+                return
+        subscriber.acknowledge(request={"subscription": subscription_path, "ack_ids": ack_ids})
+    raise AssertionError(f"No Pub/Sub message found for asset_id={expected_asset_id}")
+
+
+def _create_temp_subscription(project_id: str, topic_name: str) -> Tuple[pubsub_v1.SubscriberClient, str]:
     subscriber = pubsub_v1.SubscriberClient()
     publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(project_id, topic_name)
     subscription_id = f"ingest-test-{int(time.time())}"
     subscription_path = subscriber.subscription_path(project_id, subscription_id)
     subscriber.create_subscription(name=subscription_path, topic=topic_path)
-    try:
-        deadline = time.time() + wait_seconds
-        while time.time() < deadline:
-            pulled = subscriber.pull(
-                request={"subscription": subscription_path, "max_messages": 10},
-                timeout=5,
-            )
-            if not pulled.received_messages:
-                time.sleep(1)
-                continue
-            ack_ids = []
-            for item in pulled.received_messages:
-                ack_ids.append(item.ack_id)
-                payload = json.loads(item.message.data.decode("utf-8"))
-                if payload.get("asset_id") == expected_asset_id:
-                    subscriber.acknowledge(
-                        request={"subscription": subscription_path, "ack_ids": ack_ids}
-                    )
-                    return
-            subscriber.acknowledge(request={"subscription": subscription_path, "ack_ids": ack_ids})
-        raise AssertionError(f"No Pub/Sub message found for asset_id={expected_asset_id}")
-    finally:
-        subscriber.delete_subscription(request={"subscription": subscription_path})
+    return subscriber, subscription_path
 
 
 def _keyframes_prefix_exists(project_id: str, bucket: str, asset_id: str) -> bool:
@@ -167,34 +194,46 @@ def run() -> None:
     org_id = os.getenv("TEST_ORG_ID", "test-org")
     event_name = os.getenv("TEST_EVENT_NAME", "ingest-e2e")
 
-    image_resp = _upload_asset(
-        base_url=base_url,
-        filename="sample.jpg",
-        payload=_create_sample_image(),
-        asset_type="image",
-        org_id=org_id,
-        event_name=event_name,
-    )
-    image_asset_id = image_resp["asset_id"]
-    _assert_gcs_object_exists(raw_bucket, f"assets/{image_asset_id}/original.jpg", project_id)
-    image_row = _fetch_asset_row(project_id, dataset, assets_table, image_asset_id)
-    assert image_row.get("fingerprint_status") == "pending"
-    _assert_pubsub_message(project_id=project_id, topic_name=topic, expected_asset_id=image_asset_id)
+    subscriber, subscription_path = _create_temp_subscription(project_id, topic)
+    try:
+        image_resp = _upload_asset(
+            base_url=base_url,
+            filename="sample.jpg",
+            payload=_create_sample_image(),
+            asset_type="image",
+            org_id=org_id,
+            event_name=event_name,
+        )
+        image_asset_id = image_resp["asset_id"]
+        _assert_gcs_object_exists(raw_bucket, f"assets/{image_asset_id}/original.jpg", project_id)
+        image_row = _fetch_asset_row(project_id, dataset, assets_table, image_asset_id)
+        assert _fingerprint_status(image_row) == "pending"
+        _assert_pubsub_message(
+            subscriber=subscriber,
+            subscription_path=subscription_path,
+            expected_asset_id=image_asset_id,
+        )
 
-    video_resp = _upload_asset(
-        base_url=base_url,
-        filename="sample.mp4",
-        payload=_create_sample_video(),
-        asset_type="video",
-        org_id=org_id,
-        event_name=event_name,
-    )
-    video_asset_id = video_resp["asset_id"]
-    _assert_gcs_object_exists(raw_bucket, f"assets/{video_asset_id}/original.mp4", project_id)
-    assert _keyframes_prefix_exists(project_id, keyframes_bucket, video_asset_id), "Expected keyframes missing."
-    video_row = _fetch_asset_row(project_id, dataset, assets_table, video_asset_id)
-    assert video_row.get("fingerprint_status") == "pending"
-    _assert_pubsub_message(project_id=project_id, topic_name=topic, expected_asset_id=video_asset_id)
+        video_resp = _upload_asset(
+            base_url=base_url,
+            filename="sample.mp4",
+            payload=_create_sample_video(),
+            asset_type="video",
+            org_id=org_id,
+            event_name=event_name,
+        )
+        video_asset_id = video_resp["asset_id"]
+        _assert_gcs_object_exists(raw_bucket, f"assets/{video_asset_id}/original.mp4", project_id)
+        assert _keyframes_prefix_exists(project_id, keyframes_bucket, video_asset_id), "Expected keyframes missing."
+        video_row = _fetch_asset_row(project_id, dataset, assets_table, video_asset_id)
+        assert _fingerprint_status(video_row) == "pending"
+        _assert_pubsub_message(
+            subscriber=subscriber,
+            subscription_path=subscription_path,
+            expected_asset_id=video_asset_id,
+        )
+    finally:
+        subscriber.delete_subscription(request={"subscription": subscription_path})
 
     print("Ingest upload test passed for image + video.")
 

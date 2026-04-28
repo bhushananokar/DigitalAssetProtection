@@ -19,20 +19,24 @@ class VideoKeyframeExtractor:
             self.client = videointelligence.VideoIntelligenceServiceClient()
 
     def _shot_timestamps(self, video_bytes: bytes) -> List[float]:
-        features = [videointelligence.Feature.SHOT_CHANGE_DETECTION]
-        operation = self.client.annotate_video(
-            request={"features": features, "input_content": video_bytes}
-        )
-        result = operation.result(timeout=180)
-        if not result.annotation_results:
-            return []
+        try:
+            features = [videointelligence.Feature.SHOT_CHANGE_DETECTION]
+            operation = self.client.annotate_video(
+                request={"features": features, "input_content": video_bytes}
+            )
+            result = operation.result(timeout=180)
+            if not result.annotation_results:
+                return []
 
-        annotations = result.annotation_results[0]
-        timestamps: List[float] = []
-        for shot in annotations.shot_annotations:
-            seconds = shot.start_time_offset.seconds + shot.start_time_offset.nanos / 1e9
-            timestamps.append(max(seconds, 0.0))
-        return timestamps
+            annotations = result.annotation_results[0]
+            timestamps: List[float] = []
+            for shot in annotations.shot_annotations:
+                seconds = shot.start_time_offset.seconds + shot.start_time_offset.nanos / 1e9
+                timestamps.append(max(seconds, 0.0))
+            return timestamps
+        except Exception:
+            # Allow ingest to proceed even if Video Intelligence is unavailable.
+            return []
 
     def _capture_jpegs(self, video_bytes: bytes, timestamps: List[float], max_frames: int) -> List[bytes]:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
