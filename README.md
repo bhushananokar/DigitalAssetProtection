@@ -1,36 +1,36 @@
 # Digital Asset Protection
 
-Monorepo for a media fingerprinting and unauthorized content detection platform.
+Monorepo for ingesting official media, generating robust fingerprints, detecting unauthorized reuse, scoring violations, alerting rights holders, and surfacing results in a dashboard.
 
-## Services and ports (local)
+## Repo Components
 
-- `dashboard` -> `http://localhost:3000`
-- `ingest` -> `http://localhost:3001`
-- `violations` -> `http://localhost:3002`
-- `scanner` -> `http://localhost:3003`
-- `matching` -> `http://localhost:3004`
-- `fingerprint` -> `http://localhost:3005`
+- `services/ingest` - upload API, GCS storage, BigQuery asset records, keyframe extraction, `asset-uploaded` publish
+- `services/fingerprint` - embedding generation + indexing pipeline (ML-owned)
+- `services/matching` - similarity lookup + manual match API (ML-owned)
+- `services/violations` - `match-found` consumer, severity scoring, violations APIs
+- `services/alerting` - Pub/Sub-triggered Cloud Function for evidence bundle + webhook/log alerts
+- `services/anomaly` - scheduled anomaly detection engine and run endpoint
+- `services/scanner` - YouTube/web scan service (full stack-owned)
+- `dashboard` - Next.js UI
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 20+
-- npm
 - Google Cloud SDK (`gcloud`)
+- BigQuery, Pub/Sub, Cloud Storage access in your target GCP project
 
-## 1) Clone and install
+## Local Setup
 
-From repo root:
+### 1) Python dependencies
 
 ```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection"
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-pip install -r services/ingest/requirements.txt -r services/violations/requirements.txt
 ```
 
-Install dashboard and scanner deps:
+### 2) Node dependencies
 
 ```powershell
 cd dashboard
@@ -40,131 +40,101 @@ npm install
 cd ..\..
 ```
 
-## 2) Environment setup
+### 3) Environment configuration
 
-Use `setup.env` as the central env file. It already includes:
+- Copy/maintain values in `setup.env` from `setup.env.example`.
+- `setup.env` is the shared source for Python services and deploy scripts.
+- Dashboard uses `dashboard/.env.local`.
+- Scanner uses `services/scanner/.env`.
 
-- shared GCP vars
-- scanner vars
-- dashboard URL vars
+### 4) Google credentials (local cloud-backed testing)
 
-Dashboard also needs `dashboard/.env.local`:
-
-```env
-NEXT_PUBLIC_INGEST_URL=http://localhost:3001
-NEXT_PUBLIC_VIOLATIONS_URL=http://localhost:3002
-NEXT_PUBLIC_SCANNER_URL=http://localhost:3003
-FINGERPRINT_URL=http://localhost:3004
-```
-
-Scanner also needs `services/scanner/.env`:
-
-```env
-PORT=3003
-YOUTUBE_API_KEY=
-CUSTOM_SEARCH_API_KEY=
-CUSTOM_SEARCH_CX=
-MATCHING_SERVICE_URL=http://localhost:3004
-BIGQUERY_PROJECT_ID=
-BIGQUERY_DATASET=
-```
-
-> For local scanner testing without ADC, keep scanner `BIGQUERY_*` empty to use in-memory fallback.
-
-## 3) Google auth (required for ingest/violations and cloud-backed flows)
+Use one of:
 
 ```powershell
 gcloud auth application-default login
-gcloud config set project gen-lang-client-0647383072
 ```
 
-## 4) Load `setup.env` into each Python service terminal
-
-Run this once per terminal before starting `uvicorn`:
+or set:
 
 ```powershell
-Get-Content .\setup.env | ForEach-Object {
-  if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
-  $name, $value = $_ -split '=', 2
-  [System.Environment]::SetEnvironmentVariable($name, $value, 'Process')
-}
+$env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service-account.json"
 ```
 
-## 5) Start all services (separate terminals)
+## Recommended Local Ports
 
-### Terminal A - matching
+- dashboard: `3000`
+- scanner: `3003`
+- matching: `3004`
+- fingerprint: `3005`
+- ingest: `8080`
+- violations: `8090`
+- anomaly: `8081`
+
+## Run Services Locally (example)
 
 ```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection"
-.\.venv\Scripts\activate
-uvicorn services.matching.main:app --host 0.0.0.0 --port 3004
+# matching
+.\.venv\Scripts\python -m uvicorn services.matching.main:app --host 127.0.0.1 --port 3004
+
+# fingerprint
+.\.venv\Scripts\python -m uvicorn services.fingerprint.main:app --host 127.0.0.1 --port 3005
+
+# ingest
+.\.venv\Scripts\python -m uvicorn services.ingest.main:app --host 127.0.0.1 --port 8080
+
+# violations
+.\.venv\Scripts\python -m uvicorn services.violations.main:app --host 127.0.0.1 --port 8090
+
+# anomaly
+.\.venv\Scripts\python -m uvicorn services.anomaly.main:app --host 127.0.0.1 --port 8081
 ```
 
-### Terminal B - fingerprint
+## Deployment Scripts
+
+- `scripts/deploy.sh` - fingerprint + matching (+ worker)
+- `scripts/deploy_ingest.sh` - ingest service + infra bootstrap for ingest-side resources
+- `scripts/deploy_violations.sh` - violations API + worker
+- `scripts/deploy_alerting.sh` - alerting Cloud Function (Gen2)
+- `scripts/deploy_anomaly.sh` - anomaly Cloud Run service
+- `scripts/setup_scheduler.sh` - 15-minute scheduler for anomaly run endpoint
+- `scripts/deploy_all.sh` - full-stack orchestration in integration order
+- `scripts/verify_wiring.sh` - read-only checks for Pub/Sub, Cloud Run, service account wiring
+
+## Tests
+
+### Service-level integration tests
 
 ```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection"
-.\.venv\Scripts\activate
-uvicorn services.fingerprint.main:app --host 0.0.0.0 --port 3005
+.\.venv\Scripts\python -m services.ingest.test_upload
+.\.venv\Scripts\python -m services.violations.test_mock_violation
+.\.venv\Scripts\python -m services.alerting.test_alert
+.\.venv\Scripts\python -m services.anomaly.test_anomaly
 ```
 
-### Terminal C - ingest
+### End-to-end integration test
 
 ```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection"
-.\.venv\Scripts\activate
-# load setup.env using snippet above
-uvicorn services.ingest.main:app --host 0.0.0.0 --port 3001
+.\.venv\Scripts\python scripts/e2e_test.py
 ```
 
-### Terminal D - violations
+The E2E flow verifies:
 
-```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection"
-.\.venv\Scripts\activate
-# load setup.env using snippet above
-uvicorn services.violations.main:app --host 0.0.0.0 --port 3002
-```
+1. ingest upload
+2. matching submission on modified media
+3. violation in BigQuery
+4. violation visible via violations API
+5. alert topic event for high/critical severity
 
-### Terminal E - scanner
+## Known Behavior / Notes
 
-```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection\services\scanner"
-npm run dev
-```
-
-### Terminal F - dashboard
-
-```powershell
-cd "C:\Users\Ameya\Documents\GitHub\DigitalAssetProtection\dashboard"
-npm run dev -- -p 3000
-```
-
-## 6) Health checks
-
-```powershell
-curl http://localhost:3001/healthz
-curl http://localhost:3002/healthz
-curl http://localhost:3003/healthz
-curl http://localhost:3004/healthz
-curl http://localhost:3005/healthz
-```
-
-Open dashboard:
-
-- [http://localhost:3000](http://localhost:3000)
-
-## 7) Dry-run checklist
-
-1. Open `/assets` and upload an official image/video.
-2. Open `/check` and run "Upload File" with same file (expect `matched: true` when indexing is ready).
-3. Open `/scanner`, add keyword(s), run scan, verify jobs table updates.
-4. Open `/violations` and `/` (overview) to confirm violations service responses.
+- BigQuery may reject immediate `UPDATE` on rows still in streaming buffer; alerting handles this gracefully and still sends notifications.
+- `scripts/e2e_test.py` includes a local fallback path for violation processing when a background violations subscriber is not running.
+- For scanner-to-matching calls in Cloud Run, use internal URL via `MATCHING_SERVICE_URL_INTERNAL` when available; otherwise public URL is used.
 
 ## Troubleshooting
 
-- `Errno 10048` -> port already in use. Stop old process or run on another port.
-- `DefaultCredentialsError` -> run `gcloud auth application-default login`.
-- `POST /api/assets/upload 500` -> ingest not running or ingest env missing.
-- `/api/violations/* 500` -> violations not running or BigQuery auth/env issue.
-- Scanner all `matched: false` -> scanner working, but no vector match above threshold for discovered sources.
+- `DefaultCredentialsError` -> configure ADC (`gcloud auth application-default login`) or `GOOGLE_APPLICATION_CREDENTIALS`
+- Port already in use -> stop old process (`Get-NetTCPConnection -LocalPort <port>`)
+- Ingest upload `500` -> check `setup.env` values and GCP IAM on bucket/topic/table
+- Violations API empty after publish -> ensure `PUBSUB_MATCH_SUB` consumer is running (`violations-subscriber-service`)

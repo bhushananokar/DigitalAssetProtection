@@ -1,5 +1,10 @@
 import dotenv from "dotenv";
+import path from "node:path";
 
+// Load shared root env first, then allow local scanner .env to override.
+const scannerRoot = process.cwd();
+const sharedSetupEnv = path.resolve(scannerRoot, "../../setup.env");
+dotenv.config({ path: sharedSetupEnv });
 dotenv.config();
 
 function required(name: string): string {

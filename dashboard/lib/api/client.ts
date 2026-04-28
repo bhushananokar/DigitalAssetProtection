@@ -42,6 +42,21 @@ export async function apiRequest<T>(url: string, options: RequestOptions = {}): 
   });
 
   if (!response.ok) {
+    // #region agent log
+    fetch("http://127.0.0.1:7578/ingest/a77b7fa5-1608-4fab-928b-0a39f4afb14f", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "1309cd" },
+      body: JSON.stringify({
+        sessionId: "1309cd",
+        runId: "pre-fix",
+        hypothesisId: "H4",
+        location: "dashboard/lib/api/client.ts:45",
+        message: "api_request_non_ok_response",
+        data: { url, status: response.status },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     let payload: ApiError;
     try {
       payload = (await response.json()) as ApiError;

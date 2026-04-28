@@ -4,6 +4,24 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, XAx
 import type { ViolationsStats } from "@/lib/types";
 
 export function OverviewClient({ stats, anomalyCount }: { stats: ViolationsStats; anomalyCount: number }) {
+  // #region agent log
+  fetch("http://127.0.0.1:7578/ingest/a77b7fa5-1608-4fab-928b-0a39f4afb14f", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "1309cd" },
+    body: JSON.stringify({
+      sessionId: "1309cd",
+      runId: "pre-fix-shape",
+      hypothesisId: "H7",
+      location: "dashboard/components/OverviewClient.tsx:8",
+      message: "overview_render_stats_shape",
+      data: {
+        hasViolationsBySeverity: Boolean((stats as any)?.violations_by_severity),
+        hasCountBySeverity: Boolean((stats as any)?.count_by_severity),
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">

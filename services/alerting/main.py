@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
@@ -13,6 +15,25 @@ import requests
 from bs4 import BeautifulSoup
 from google.cloud import bigquery, storage
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("dap.alerting")
+
+
+def _load_setup_env_if_present() -> None:
+    here = Path(__file__).resolve()
+    repo_root = here.parent.parent.parent
+    env_path = repo_root / "setup.env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 def _getenv(name: str, default: Optional[str] = None) -> str:
     value = os.getenv(name, default)
@@ -26,6 +47,9 @@ def _require(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+_load_setup_env_if_present()
 
 
 @dataclass
@@ -245,17 +269,19 @@ def _send_notification(
     if webhook_url:
         response = requests.post(webhook_url, json=payload, timeout=10)
         response.raise_for_status()
+        logger.info("alert_webhook_sent violation_id=%s status_code=%d", violation_id, response.status_code)
         return
-    print(f"[alerting] ALERT (webhook disabled): {json.dumps(payload)}")
+    logger.info("alert_logged_webhook_disabled payload=%s", json.dumps(payload))
 
 
 def handle_high_severity_violation(event: Dict[str, Any], context: Any = None) -> None:
     parsed = _parse_pubsub_message(event)
     violation_id = str(parsed.get("violation_id") or "")
     if not violation_id:
-        print("[alerting] Missing violation_id in Pub/Sub message.")
+        logger.warning("alert_event_ignored reason=missing_violation_id payload=%s", parsed)
         return
 
+    logger.info("alert_event_received violation_id=%s", violation_id)
     ctx = AlertingContext.from_env()
     violation = _fetch_violation(ctx, violation_id)
     matched_asset_id = str(violation.get("matched_asset_id") or violation.get("asset_id") or "")
@@ -267,8 +293,9 @@ def handle_high_severity_violation(event: Dict[str, Any], context: Any = None) -
         bundle = _build_evidence_bundle(violation=violation, asset_name=asset_name, screenshot_url=screenshot_url)
         evidence_uri = _store_bundle(ctx, violation_id, bundle)
         _update_evidence_uri(ctx, violation_id, evidence_uri)
+        logger.info("evidence_bundle_stored violation_id=%s evidence_uri=%s", violation_id, evidence_uri)
     except Exception as exc:
-        print(f"[alerting] Evidence packaging failed for {violation_id}: {exc}")
+        logger.exception("evidence_bundle_failed violation_id=%s error=%s", violation_id, exc)
 
     try:
         _send_notification(
@@ -282,4 +309,6 @@ def handle_high_severity_violation(event: Dict[str, Any], context: Any = None) -
             evidence_uri=evidence_uri,
         )
     except Exception as exc:
-        print(f"[alerting] Notification send failed for {violation_id}: {exc}")
+        logger.exception("alert_notification_failed violation_id=%s error=%s", violation_id, exc)
+    else:
+        logger.info("alert_pipeline_completed violation_id=%s severity=%s", violation_id, violation.get("severity"))

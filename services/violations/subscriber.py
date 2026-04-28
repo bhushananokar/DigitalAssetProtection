@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Event
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -13,6 +15,25 @@ from uuid import uuid4
 from google.cloud import pubsub_v1
 
 from services.violations.bigquery import ViolationsBigQuery
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("dap.violations.subscriber")
+
+
+def _load_setup_env_if_present() -> None:
+    here = Path(__file__).resolve()
+    repo_root = here.parent.parent.parent
+    env_path = repo_root / "setup.env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def _require(name: str) -> str:
@@ -27,6 +48,9 @@ def _getenv(name: str, default: Optional[str] = None) -> str:
     if value is None:
         raise RuntimeError(f"Missing environment variable: {name}")
     return value
+
+
+_load_setup_env_if_present()
 
 
 def score_severity(similarity: float) -> Optional[str]:
@@ -97,12 +121,19 @@ class ViolationSubscriber:
         self.subscriber = pubsub_v1.SubscriberClient()
         self.topic_path = self.publisher.topic_path(self.project_id, self.high_severity_topic)
         self.subscription_path = self.subscriber.subscription_path(self.project_id, self.match_subscription)
+        logger.info(
+            "subscriber_initialized project_id=%s subscription=%s high_topic=%s",
+            self.project_id,
+            self.subscription_path,
+            self.topic_path,
+        )
 
     def process_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         msg = _extract_match_payload(payload)
         similarity = float(msg["similarity_score"])
         severity = score_severity(similarity)
         if severity is None:
+            logger.info("message_discarded similarity=%s reason=below_threshold", similarity)
             return None
 
         discovered_at = msg["discovered_at"] or datetime.now(timezone.utc).isoformat()
@@ -127,6 +158,13 @@ class ViolationSubscriber:
             "updated_at": created_at,
         }
         self.bq.insert_violation(row)
+        logger.info(
+            "violation_inserted violation_id=%s asset_id=%s severity=%s similarity=%s",
+            violation_id,
+            asset_id,
+            severity,
+            similarity,
+        )
 
         if severity in ("high", "critical"):
             outgoing = {
@@ -139,6 +177,7 @@ class ViolationSubscriber:
                 "discovered_at": discovered_at,
             }
             self.publisher.publish(self.topic_path, data=json.dumps(outgoing).encode("utf-8"))
+            logger.info("high_severity_republished violation_id=%s severity=%s", violation_id, severity)
         return row
 
     def process_message(self, pubsub_message: pubsub_v1.subscriber.message.Message) -> None:
@@ -146,14 +185,15 @@ class ViolationSubscriber:
         try:
             self.process_payload(payload)
             pubsub_message.ack()
+            logger.info("message_acknowledged message_id=%s", pubsub_message.message_id)
         except Exception as exc:
-            print(f"[violations.subscriber] Failed processing message: {exc}")
+            logger.exception("message_processing_failed message_id=%s error=%s", pubsub_message.message_id, exc)
             pubsub_message.nack()
 
     def run_forever(self, stop_event: Optional[Event] = None) -> None:
         callback = self.process_message
         future = self.subscriber.subscribe(self.subscription_path, callback=callback)
-        print(f"[violations.subscriber] Listening on {self.subscription_path}")
+        logger.info("subscriber_listening subscription=%s", self.subscription_path)
         try:
             while True:
                 if stop_event and stop_event.is_set():

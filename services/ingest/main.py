@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Request
 
 from services.ingest.bigquery import IngestBigQuery
 from services.ingest.gcs import GcsHelper
@@ -20,6 +23,8 @@ ALLOWED_EXTENSIONS = {"mp4", "mov", "jpg", "jpeg", "png", "svg"}
 VIDEO_EXTENSIONS = {"mp4", "mov"}
 
 app = FastAPI(title="Ingest Service", version="1.0.0")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("dap.ingest")
 
 
 def _load_setup_env_if_present() -> None:
@@ -93,6 +98,26 @@ def healthz() -> dict:
     return {"ok": True}
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.exception("request_failed method=%s path=%s duration_ms=%d", request.method, request.url.path, elapsed_ms)
+        raise
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "request_completed method=%s path=%s status=%d duration_ms=%d",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
+
 @app.post("/assets/upload")
 async def upload_asset(
     file: UploadFile = File(...),
@@ -100,6 +125,7 @@ async def upload_asset(
     asset_type: AssetType = Form(...),
     event_name: str = Form(...),
 ) -> dict:
+    logger.info("asset_upload_started org_id=%s asset_type=%s event_name=%s filename=%s", org_id, asset_type, event_name, file.filename)
     raw_bucket = _require("GCS_RAW_BUCKET")
     keyframes_bucket = _getenv("GCS_KEYFRAMES_BUCKET", raw_bucket)
     topic = _getenv("PUBSUB_ASSET_TOPIC", "asset-uploaded")
@@ -125,6 +151,7 @@ async def upload_asset(
     keyframe_uris: list[str] = []
     if asset_type == "video":
         frames = video.extract_keyframes_to_jpegs(payload, max_frames=12)
+        logger.info("video_keyframes_extracted asset_id=%s count=%d", asset_id, len(frames))
         for idx, frame_bytes in enumerate(frames, start=1):
             frame_blob = f"assets/{asset_id}/keyframes/frame_{idx}.jpg"
             keyframe_uri = gcs.upload_bytes(
@@ -170,6 +197,7 @@ async def upload_asset(
             "keyframe_uris": keyframe_uris,
         },
     )
+    logger.info("asset_upload_completed asset_id=%s storage_uri=%s keyframes=%d", asset_id, storage_uri, len(keyframe_uris))
     return {"asset_id": asset_id, "status": "processing"}
 
 
@@ -180,12 +208,14 @@ def list_assets(
     limit: int = Query(default=20, ge=1, le=200),
     asset_type: Optional[AssetType] = Query(default=None),
 ) -> dict:
+    logger.info("assets_list_query org_id=%s asset_type=%s page=%d limit=%d", org_id, asset_type, page, limit)
     _, bq, _, _ = _helpers()
     return bq.list_assets(org_id=org_id, page=page, limit=limit, asset_type=asset_type)
 
 
 @app.get("/assets/{asset_id}")
 def get_asset(asset_id: str) -> dict:
+    logger.info("asset_detail_query asset_id=%s", asset_id)
     _, bq, _, _ = _helpers()
     row = bq.get_asset(asset_id)
     if row is None:
@@ -195,6 +225,7 @@ def get_asset(asset_id: str) -> dict:
 
 @app.delete("/assets/{asset_id}")
 def delete_asset(asset_id: str, hard_delete: bool = Query(default=False)) -> dict:
+    logger.info("asset_delete_requested asset_id=%s hard_delete=%s", asset_id, hard_delete)
     raw_bucket = _require("GCS_RAW_BUCKET")
     keyframes_bucket = _getenv("GCS_KEYFRAMES_BUCKET", raw_bucket)
     gcs, bq, _, _ = _helpers()
@@ -210,9 +241,11 @@ def delete_asset(asset_id: str, hard_delete: bool = Query(default=False)) -> dic
         if keyframes_bucket != raw_bucket:
             deleted_objects += gcs.delete_prefix(bucket=keyframes_bucket, prefix=f"assets/{asset_id}/")
 
-    return {
+    result = {
         "asset_id": asset_id,
         "deleted": True,
         "hard_delete": hard_delete,
         "gcs_objects_deleted": deleted_objects,
     }
+    logger.info("asset_delete_completed asset_id=%s hard_delete=%s gcs_objects_deleted=%d", asset_id, hard_delete, deleted_objects)
+    return result

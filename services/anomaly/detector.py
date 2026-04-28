@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from google.cloud import bigquery, pubsub_v1
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("dap.anomaly.detector")
+
+
+def _load_setup_env_if_present() -> None:
+    here = Path(__file__).resolve()
+    repo_root = here.parent.parent.parent
+    env_path = repo_root / "setup.env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 def _getenv(name: str, default: Optional[str] = None) -> str:
     value = os.getenv(name, default)
@@ -21,6 +42,9 @@ def _require(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+_load_setup_env_if_present()
 
 
 @dataclass
@@ -74,6 +98,7 @@ class AnomalyDetector:
 
     def _set_anomaly_for_assets(self, anomaly_type: str, asset_ids: List[str]) -> List[Dict[str, Any]]:
         if not asset_ids:
+            logger.info("anomaly_type_no_candidates type=%s", anomaly_type)
             return []
         columns = self._load_columns()
         asset_col = self._asset_column()
@@ -100,6 +125,7 @@ class AnomalyDetector:
           AND {time_col} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 MINUTE)
         """
         self.bq.query(update_sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+        logger.info("anomaly_rows_updated type=%s candidate_assets=%d", anomaly_type, len(asset_ids))
 
         # Read back flagged rows in this run window for optional re-publish.
         where_parts = [
@@ -118,9 +144,12 @@ class AnomalyDetector:
         result_rows = self.bq.query(
             select_sql, job_config=bigquery.QueryJobConfig(query_parameters=params[:2])
         ).result()
-        return [dict(row.items()) for row in result_rows]
+        rows = [dict(row.items()) for row in result_rows]
+        logger.info("anomaly_rows_selected type=%s rows=%d", anomaly_type, len(rows))
+        return rows
 
     def _republish_high_severity(self, flagged_rows: List[Dict[str, Any]], anomaly_type: str) -> None:
+        published = 0
         for row in flagged_rows:
             severity = str(row.get("severity") or "").lower()
             if severity not in ("high", "critical"):
@@ -137,6 +166,8 @@ class AnomalyDetector:
                 "anomaly_type": anomaly_type,
             }
             self.pubsub.publish(self.topic_path, data=json.dumps(payload, default=str).encode("utf-8"))
+            published += 1
+        logger.info("anomaly_republish_complete type=%s published=%d", anomaly_type, published)
 
     def run(self) -> Dict[str, Any]:
         asset_col = self._asset_column()
@@ -169,6 +200,12 @@ class AnomalyDetector:
         spike_assets = self._query_asset_ids(spike_sql)
         coordinated_assets = self._query_asset_ids(coordinated_sql)
         platform_cluster_assets = self._query_asset_ids(platform_cluster_sql)
+        logger.info(
+            "anomaly_candidates spike=%d coordinated=%d platform_cluster=%d",
+            len(spike_assets),
+            len(coordinated_assets),
+            len(platform_cluster_assets),
+        )
 
         all_flagged_violation_ids: Set[str] = set()
         breakdown: Dict[str, int] = {}
@@ -186,12 +223,14 @@ class AnomalyDetector:
                 if vid:
                     all_flagged_violation_ids.add(str(vid))
 
-        return {
+        result = {
             "run_id": run_id,
             "started_at": started_at,
             "violations_flagged": len(all_flagged_violation_ids),
             "breakdown": breakdown,
         }
+        logger.info("anomaly_run_result run_id=%s flagged=%d breakdown=%s", run_id, result["violations_flagged"], breakdown)
+        return result
 
 
 def create_default_detector() -> AnomalyDetector:
