@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-soft: #dbeafe;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+}
+
+.dark {
+  --bg: #090b10;
+  --panel: #111622;
+  --panel-2: #0f172a;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --border: #1f2a3d;
+  --primary: #60a5fa;
+  --primary-soft: #1d4ed8;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fb923c;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, Arial, sans-serif;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border p-4 shadow-sm;
+    border-color: var(--border);
+    background: var(--panel);
+  }
+
+  .card-soft {
+    @apply rounded-xl border p-4;
+    border-color: var(--border);
+    background: var(--panel-2);
+  }
+
+  .input {
+    @apply w-full rounded-lg border px-3 py-2 text-sm outline-none transition;
+    border-color: var(--border);
+    background: var(--panel);
+  }
+
+  .input:focus {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 25%, transparent);
+    border-color: var(--primary);
+  }
+
+  .btn {
+    @apply rounded-lg px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply rounded-lg px-3 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50;
+    background: var(--primary);
+  }
+
+  .btn-secondary {
+    @apply rounded-lg border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+    border-color: var(--border);
+    background: var(--panel);
+  }
+
+  .badge {
+    @apply rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+}
